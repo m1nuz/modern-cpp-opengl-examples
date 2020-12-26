@@ -10,7 +10,7 @@ target_compile_options(${APP_NAME}
         -pedantic
         -Wall
         -Wextra
-        -Werror
+        #-Werror
 )
 
 target_compile_features(${APP_NAME}
