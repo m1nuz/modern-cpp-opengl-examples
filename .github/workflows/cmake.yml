@@ -19,7 +19,7 @@ jobs:
     
     - name: Install Dependencies (Linux)
       run: |
-        sudo apt-get install -y g++-10 g++-10-multilib
+        sudo apt-get install -y g++-10
         echo "CC=gcc-10" >> $GITHUB_ENV
         echo "CXX=g++-10" >> $GITHUB_ENV
         sudo apt-get install -qq libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
