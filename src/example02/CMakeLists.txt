@@ -10,7 +10,7 @@ target_compile_options(${APP_NAME}
         -pedantic
         -Wall
         -Wextra
-        -Werror
+        #-Werror
 )
 
 target_compile_features(${APP_NAME}
@@ -21,6 +21,7 @@ target_compile_features(${APP_NAME}
 target_include_directories(${APP_NAME}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${glm_SOURCE_DIR}>
 )
 
 target_link_libraries(${APP_NAME}
