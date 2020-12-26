@@ -19,6 +19,9 @@ jobs:
     
     - name: Install Dependencies (Linux)
       run: |
+        sudo apt-get install -y g++-9 g++-9-multilib
+        echo "CC=gcc-9" >> $GITHUB_ENV
+        echo "CXX=g++-9" >> $GITHUB_ENV
         sudo apt-get install -qq libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
     - name: Create Build Environment
