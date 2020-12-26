@@ -1,0 +1,11 @@
+BasedOnStyle: WebKit
+AllowShortFunctionsOnASingleLine: None
+BreakBeforeBraces: Attach
+ColumnLimit: '120'
+IndentWidth: '4'
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: 'true'
+SpacesInParentheses: 'true'
+Standard: Auto
+TabWidth: '4'
+FixNamespaceComments: true
