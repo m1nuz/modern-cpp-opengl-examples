@@ -34,7 +34,7 @@ private:
             return EXIT_FAILURE;
         atexit( glfwTerminate );
 
-        auto window = application::create_window( { .width = 800, .height = 600, .title = title } );
+        auto window = application::create_window( { .width = 1440, .height = 1080, .title = title } );
         if ( !window ) {
             journal::error( _tag, "Couldn't create window" );
             return EXIT_FAILURE;

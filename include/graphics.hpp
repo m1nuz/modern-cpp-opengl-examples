@@ -132,6 +132,8 @@ enum class TextureFiltering {
     Anisotropic,
 };
 
+using u8_buffer = std::vector<uint8_t>;
+
 struct CreateTextureInfo {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -140,8 +142,21 @@ struct CreateTextureInfo {
     bool mipmaps = true;
     uint32_t levels = 4;
     TextureFiltering filter = TextureFiltering::Trilinear;
-    std::vector<uint8_t> pixels;
+    u8_buffer pixels;
 };
+
+struct CreateTextureArrayInfo {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 0;
+    PixelFormat format = PixelFormat::unknown;
+    bool mipmaps = true;
+    uint32_t levels = 4;
+    TextureFiltering filter = TextureFiltering::Trilinear;
+    std::vector<u8_buffer> pixels;
+};
+
+using CreateTextureCubemapInfo = CreateTextureArrayInfo;
 
 struct TextureSampler {
     auto is_valid( ) const noexcept -> bool {
@@ -150,6 +165,22 @@ struct TextureSampler {
 
     uint32_t id = 0;
     uint32_t target = 0;
+};
+
+enum class BufferType { Unknown, VertexArray, VertexElements, Uniform };
+
+struct Buffer {
+    auto is_valid( ) const noexcept -> bool {
+        return id != 0;
+    }
+
+    uint32_t id = 0;
+    uint32_t size = 0;
+};
+
+struct CreateBufferInfo {
+    void* data = nullptr;
+    size_t size = 0;
 };
 
 struct Framebuffer {
@@ -206,7 +237,7 @@ struct CreateGeometryInfo {
     vec3 min = vec3 { 0.f };
     vec3 max = vec3 { 0.f };
     VertexFormat format = VertexFormat::unknown;
-    std::vector<uint8_t> vertices;
+    u8_buffer vertices;
     std::vector<uint16_t> indices = { };
 };
 
@@ -216,6 +247,7 @@ struct ProgramResourceInfo {
     int32_t location = -1;
     int32_t num = 0;
     uint32_t type = 0;
+    uint32_t buffer_binding = 0;
 };
 
 struct ProgramPipeline {
@@ -227,6 +259,7 @@ struct ProgramPipeline {
 
     std::vector<ProgramResourceInfo> uniforms;
     std::vector<ProgramResourceInfo> attributes;
+    std::vector<ProgramResourceInfo> uniform_blocks;
 };
 
 struct CreatePipelineInfo {
@@ -238,17 +271,17 @@ struct CreatePipelineInfo {
 ///
 /// Commands
 ///
-struct clear_frame {
-    clear_frame( ) = default;
+struct ClearCommand {
+    ClearCommand( ) = default;
 
-    clear_frame( const vec4& clear_color )
+    ClearCommand( const vec4& clear_color )
         : color { clear_color }
         , viewport { 0.f, 0.f, default_framebuffer.width, default_framebuffer.height }
         , depth { 1.f }
         , fb { default_framebuffer.id } {
     }
 
-    clear_frame( const Framebuffer& f, const vec4& clear_color )
+    ClearCommand( const Framebuffer& f, const vec4& clear_color )
         : color { clear_color }
         , viewport { 0.f, 0.f, f.width, f.height }
         , depth { 1.f }
@@ -259,6 +292,33 @@ struct clear_frame {
     vec4 viewport = { };
     float depth = 1.0f;
     uint32_t fb = 0;
+};
+
+struct BindBufferCommand {
+    BindBufferCommand( ) = default;
+    BindBufferCommand( BufferType t, const Buffer& b )
+        : type { t }
+        , id { b.id } {
+    }
+
+    BindBufferCommand( BufferType t, const Buffer& b, const ProgramPipeline& p, std::string_view block_name )
+        : type { t }
+        , id { b.id }
+        , offset { 0 }
+        , size { b.size } {
+        for ( const auto& ub : p.uniform_blocks ) {
+            if ( ub.name == block_name ) {
+                block_index = ub.buffer_binding;
+                break;
+            }
+        }
+    }
+
+    BufferType type = BufferType::Unknown;
+    int32_t block_index = -1;
+    uint32_t id = 0;
+    uint32_t offset = 0;
+    uint32_t size = 0;
 };
 
 struct BindProgramCommand {
@@ -352,8 +412,8 @@ struct DrawElementsCommand {
     uint32_t num_instances = 1;
 };
 
-using Command = std::variant<clear_frame, BindProgramCommand, BindVertexArrayCommand, BindTextureCommand,
-    BindFramebufferCommand, BlitFramebufferCommand, SetUniformCommand, DrawElementsCommand>;
+using Command = std::variant<ClearCommand, BindBufferCommand, BindProgramCommand, BindVertexArrayCommand,
+    BindTextureCommand, BindFramebufferCommand, BlitFramebufferCommand, SetUniformCommand, DrawElementsCommand>;
 
 struct CommandBuffer {
     CommandBuffer( ) = default;
@@ -462,6 +522,21 @@ namespace detail {
             u );
     }
 
+    inline auto buffer_type( BufferType type ) {
+        switch ( type ) {
+        case BufferType::Unknown:
+            break;
+        case BufferType::VertexArray:
+            return GL_ARRAY_BUFFER;
+        case BufferType::VertexElements:
+            return GL_ELEMENT_ARRAY_BUFFER;
+        case BufferType::Uniform:
+            return GL_UNIFORM_BUFFER;
+        }
+
+        return GL_NONE;
+    }
+
     inline auto have_elements( VertexFormat f ) -> bool {
         return f != VertexFormat::v3_f32 && f != VertexFormat::unknown;
     }
@@ -470,13 +545,20 @@ namespace detail {
         std::visit(
             [&]( auto&& arg ) {
                 using T = std::decay_t<decltype( arg )>;
-                if constexpr ( std::is_same_v<T, clear_frame> ) {
+                if constexpr ( std::is_same_v<T, ClearCommand> ) {
                     glClipControl( GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE );
                     glClearNamedFramebufferfv( arg.fb, GL_COLOR, 0, &arg.color[0] );
                     if ( buf.depth_stencil.depth_write ) {
                         glClearNamedFramebufferfv( arg.fb, GL_DEPTH, 0, &arg.depth );
                     }
                     glViewportIndexedfv( 0, &arg.viewport[0] );
+                } else if constexpr ( std::is_same_v<T, BindBufferCommand> ) {
+                    if ( arg.block_index == -1 ) {
+                        glBindBuffer( detail::buffer_type( arg.type ), arg.id );
+                    } else {
+                        glBindBufferRange(
+                            detail::buffer_type( arg.type ), arg.block_index, arg.id, arg.offset, arg.size );
+                    }
                 } else if constexpr ( std::is_same_v<T, BindProgramCommand> ) {
                     glBindProgramPipeline( arg.id );
                 } else if constexpr ( std::is_same_v<T, BindVertexArrayCommand> ) {
@@ -515,25 +597,46 @@ namespace detail {
     inline auto get_program_resources( uint32_t pid, uint32_t program_interface ) {
         std::vector<ProgramResourceInfo> resources;
 
-        size_t num_properties = program_interface == GL_UNIFORM ? 5 : 4;
+        if ( program_interface == GL_UNIFORM_BLOCK ) {
+            GLint num_uniform_blocks = 0;
+            glGetProgramInterfaceiv( pid, program_interface, GL_ACTIVE_RESOURCES, &num_uniform_blocks );
 
-        GLint num_uniforms = 0;
-        glGetProgramInterfaceiv( pid, program_interface, GL_ACTIVE_RESOURCES, &num_uniforms );
-        const GLenum properties[5] = { GL_TYPE, GL_ARRAY_SIZE, GL_NAME_LENGTH, GL_LOCATION, GL_BLOCK_INDEX };
+            size_t num_properties = 3;
+            const GLenum properties[3] = { GL_NUM_ACTIVE_VARIABLES, GL_BUFFER_BINDING, GL_NAME_LENGTH };
 
-        for ( auto i = 0; i < num_uniforms; i++ ) {
-            GLint values[5];
-            glGetProgramResourceiv( pid, program_interface, i, num_properties, properties, 5, nullptr, values );
+            for ( auto i = 0; i < num_uniform_blocks; i++ ) {
+                GLint values[3] = { };
+                glGetProgramResourceiv( pid, program_interface, i, num_properties, properties, 3, nullptr, values );
 
-            if ( program_interface == GL_UNIFORM && values[4] != -1 )
-                continue;
+                std::string name;
+                name.resize( values[2] );
+                glGetProgramResourceName( pid, program_interface, i, name.size( ), nullptr, &name[0] );
+                name.resize( values[2] - 1 );
 
-            std::string name;
-            name.resize( values[2] );
-            glGetProgramResourceName( pid, program_interface, i, name.size( ), nullptr, &name[0] );
-            name.resize( values[2] - 1 );
+                resources.push_back(
+                    { .name = name, .pid = pid, .buffer_binding = static_cast<uint32_t>( values[1] ) } );
+            }
+        } else {
+            size_t num_properties = program_interface == GL_UNIFORM ? 5 : 4;
 
-            resources.push_back( { name, pid, values[3], values[1], static_cast<uint32_t>( values[0] ) } );
+            GLint num_uniforms = 0;
+            glGetProgramInterfaceiv( pid, program_interface, GL_ACTIVE_RESOURCES, &num_uniforms );
+            const GLenum properties[5] = { GL_TYPE, GL_ARRAY_SIZE, GL_NAME_LENGTH, GL_LOCATION, GL_BLOCK_INDEX };
+
+            for ( auto i = 0; i < num_uniforms; i++ ) {
+                GLint values[5] = { };
+                glGetProgramResourceiv( pid, program_interface, i, num_properties, properties, 5, nullptr, values );
+
+                if ( program_interface == GL_UNIFORM && values[4] != -1 )
+                    continue;
+
+                std::string name;
+                name.resize( values[2] );
+                glGetProgramResourceName( pid, program_interface, i, name.size( ), nullptr, &name[0] );
+                name.resize( values[2] - 1 );
+
+                resources.push_back( { name, pid, values[3], values[1], static_cast<uint32_t>( values[0] ) } );
+            }
         }
 
         return resources;
@@ -641,8 +744,9 @@ struct DrawGeometryCommand {
     DrawElementsCommand el;
 };
 
-using clear_frame = clear_frame;
+using clear_frame = ClearCommand;
 using bind_vao = BindVertexArrayCommand;
+using bind_buffer = BindBufferCommand;
 using bind_pipeline = BindProgramCommand;
 using bind_texture = BindTextureCommand;
 using set_uniform = SetUniformCommand;
@@ -705,6 +809,66 @@ inline auto create_texture( const CreateTextureInfo& info ) noexcept -> Texture 
     return { id, GL_TEXTURE_2D, info.width, info.height, 0 };
 }
 
+inline auto create_texture_array( const CreateTextureArrayInfo& info ) noexcept -> Texture {
+    const auto w = static_cast<GLsizei>( info.width );
+    const auto h = static_cast<GLsizei>( info.height );
+    const auto d = static_cast<GLsizei>( info.depth );
+
+    auto internal_format = static_cast<GLint>( 0 );
+    auto format = static_cast<GLenum>( 0 );
+    auto type = static_cast<GLenum>( 0 );
+    detail::get_texture_format_from_pixelformat( info.format, internal_format, format, type );
+
+    auto id = 0u;
+    glCreateTextures( GL_TEXTURE_2D_ARRAY, 1, &id );
+
+    detail::apply_texture_fitering( id, info.filter, info.levels );
+
+    glTextureStorage3D( id, info.levels, internal_format, w, h, d );
+    for ( int i = 0; i < d; i++ ) {
+        const auto pixels = info.pixels[i].empty( ) ? nullptr : reinterpret_cast<const void*>( &info.pixels[i][0] );
+        glTextureSubImage3D( id, 0, 0, 0, i, w, h, 1, format, type, pixels );
+    }
+
+    if ( info.mipmaps ) {
+        glGenerateTextureMipmap( id );
+    }
+
+    return { id, GL_TEXTURE_2D_ARRAY, info.width, info.height, info.depth };
+}
+
+inline auto create_texture_cube( const CreateTextureCubemapInfo& info ) noexcept -> Texture {
+    const auto w = static_cast<GLsizei>( info.width );
+    const auto h = static_cast<GLsizei>( info.height );
+    const auto d = static_cast<GLsizei>( 6 );
+
+    const auto levels = 4;
+
+    auto internal_format = static_cast<GLint>( 0 );
+    auto format = static_cast<GLenum>( 0 );
+    auto type = static_cast<GLenum>( 0 );
+    detail::get_texture_format_from_pixelformat( info.format, internal_format, format, type );
+
+    auto id = 0u;
+    glCreateTextures( GL_TEXTURE_CUBE_MAP, 1, &id );
+
+    detail::apply_texture_fitering( id, info.filter, info.levels );
+
+    glTextureStorage2D( id, levels, internal_format, w, h );
+
+    for ( size_t face = 0; face < d; ++face ) {
+        const auto pixels
+            = info.pixels[face].empty( ) ? nullptr : reinterpret_cast<const void*>( &info.pixels[face][0] );
+        glTextureSubImage3D( id, 0, 0, 0, face, w, h, 1, format, type, pixels );
+    }
+
+    if ( info.mipmaps ) {
+        glGenerateTextureMipmap( id );
+    }
+
+    return { id, GL_TEXTURE_CUBE_MAP, info.width, info.height, 6 };
+}
+
 inline auto destroy_texture( Texture& t ) {
     glDeleteTextures( 1, &t.id );
 }
@@ -765,6 +929,7 @@ inline auto create_program_pipeline( const CreatePipelineInfo& info ) noexcept -
 
     std::vector<ProgramResourceInfo> all_uniforms;
     std::vector<ProgramResourceInfo> all_attributes;
+    std::vector<ProgramResourceInfo> all_uniform_blocks;
 
     for ( const auto& s : info.shaders ) {
         const auto pid = s.id;
@@ -795,6 +960,11 @@ inline auto create_program_pipeline( const CreatePipelineInfo& info ) noexcept -
             journal::verbose( GRAPHICS_TAG, "Uniform {}, Location {}", u.name, u.location );
         }
 
+        auto uniform_blocks = detail::get_program_resources( pid, GL_UNIFORM_BLOCK );
+        for ( const auto& ub : uniform_blocks ) {
+            journal::verbose( GRAPHICS_TAG, "Uniform Block {}, Buffer binding {}", ub.name, ub.buffer_binding );
+        }
+
         auto attributes = detail::get_program_resources( pid, GL_PROGRAM_INPUT );
         for ( const auto& a : attributes ) {
             journal::verbose( GRAPHICS_TAG, "Attribute {}, Location {}", a.name, a.location );
@@ -802,14 +972,49 @@ inline auto create_program_pipeline( const CreatePipelineInfo& info ) noexcept -
 
         all_uniforms.insert( std::end( all_uniforms ), std::begin( uniforms ), std::end( uniforms ) );
         all_attributes.insert( std::end( all_attributes ), std::begin( attributes ), std::end( attributes ) );
+        all_uniform_blocks.insert(
+            std::end( all_uniform_blocks ), std::begin( uniform_blocks ), std::end( uniform_blocks ) );
     }
 
-    return ProgramPipeline { id, all_uniforms, all_attributes };
+    return ProgramPipeline { id, all_uniforms, all_attributes, all_uniform_blocks };
 }
 
 inline auto destroy_program_pipeline( ProgramPipeline& p ) {
     glDeleteProgramPipelines( 1, &p.id );
     p.id = 0;
+}
+
+inline auto create_buffer( const CreateBufferInfo& info ) -> Buffer {
+    auto id = 0u;
+    glCreateBuffers( 1, &id );
+    glNamedBufferData( id, info.size, info.data, GL_DYNAMIC_DRAW );
+
+    return { id, static_cast<uint32_t>( info.size ) };
+}
+
+inline auto destroy_buffer( Buffer& b ) {
+    glDeleteBuffers( 1, &b.id );
+    b.id = 0;
+}
+
+inline auto update_buffer( Buffer& b, void* data, size_t size ) {
+    void* ptr = glMapNamedBufferRange( b.id, 0, size, GL_MAP_WRITE_BIT );
+    memcpy( ptr, data, size );
+    glUnmapNamedBuffer( b.id );
+}
+
+template <typename T> inline auto update_buffer( Buffer& b, const std::vector<T>& data ) {
+    const auto size = std::size( data ) * sizeof( T );
+    void* ptr = glMapNamedBufferRange( b.id, 0, size, GL_MAP_WRITE_BIT );
+    memcpy( ptr, &data[0], size );
+    glUnmapNamedBuffer( b.id );
+}
+
+template <typename T, size_t N> inline auto update_buffer( Buffer& b, const std::array<T, N>& data ) {
+    const auto size = std::size( data ) * sizeof( T );
+    void* ptr = glMapNamedBufferRange( b.id, 0, size, GL_MAP_WRITE_BIT );
+    memcpy( ptr, &data[0], size );
+    glUnmapNamedBuffer( b.id );
 }
 
 inline auto create_geometry( [[maybe_unused]] const CreateGeometryInfo& info ) noexcept -> Geometry {
@@ -980,7 +1185,7 @@ namespace extention {
         uint32_t depth = 0;
         PixelFormat format = PixelFormat::unknown;
         bool mipmaps = false;
-        std::vector<uint8_t> pixels;
+        u8_buffer pixels;
     };
 
     namespace detail {
@@ -1031,7 +1236,7 @@ namespace extention {
         fs.read( reinterpret_cast<char*>( &header ), sizeof header );
 
         const uint8_t bytesperpixel = header.bpp / 8;
-        std::vector<uint8_t> data;
+        u8_buffer data;
         data.resize( header.width * header.height * ( bytesperpixel + 1 ) );
 
         uint8_t* pdata = &data[0];

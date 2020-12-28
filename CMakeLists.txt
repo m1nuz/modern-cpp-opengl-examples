@@ -17,3 +17,4 @@ find_package(Threads REQUIRED)
 
 add_subdirectory(src/example01)
 add_subdirectory(src/example02)
+add_subdirectory(src/example03)
