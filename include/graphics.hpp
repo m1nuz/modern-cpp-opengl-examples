@@ -183,15 +183,51 @@ struct CreateBufferInfo {
     size_t size = 0;
 };
 
+struct Renderbuffer {
+    uint32_t id = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t samples = 0;
+};
+
+struct CreateRenderBufferInfo {
+    PixelFormat format;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t samples = 0;
+};
+
 struct Framebuffer {
     auto is_valid( ) const noexcept -> bool {
         return id != static_cast<uint32_t>( -1 );
+    }
+
+    auto is_complete( ) const noexcept {
+        return status == GL_FRAMEBUFFER_COMPLETE;
+    }
+
+    operator bool( ) const {
+        return is_complete( ) && is_valid( );
     }
 
     uint32_t id = -1;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t mask = 0;
+    uint32_t status = 0;
+};
+
+struct FramebufferAttachment {
+    uint32_t attachment = 0;
+    uint32_t attachment_target = 0;
+    uint32_t render_target = 0;
+};
+
+struct CreateFramebufferInfo {
+    uint32_t width = 0;
+    uint32_t height = 0;
+
+    std::vector<FramebufferAttachment> attachments;
 };
 
 struct Shader {
@@ -266,7 +302,7 @@ struct CreatePipelineInfo {
     std::vector<Shader> shaders;
 };
 
-[[maybe_unused]] static Framebuffer default_framebuffer { .id = 0 };
+[[maybe_unused]] static Framebuffer default_framebuffer { .id = 0, .mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT };
 
 ///
 /// Commands
@@ -349,6 +385,12 @@ struct BindTextureCommand {
 };
 
 struct BindFramebufferCommand {
+    BindFramebufferCommand( ) = default;
+
+    BindFramebufferCommand( const Framebuffer& fb )
+        : id { fb.id } {
+    }
+
     uint32_t id = 0;
 };
 
@@ -744,14 +786,16 @@ struct DrawGeometryCommand {
     DrawElementsCommand el;
 };
 
-using clear_frame = ClearCommand;
+using clear_framebuffer = ClearCommand;
 using bind_vao = BindVertexArrayCommand;
 using bind_buffer = BindBufferCommand;
 using bind_pipeline = BindProgramCommand;
 using bind_texture = BindTextureCommand;
+using bind_framebuffer = BindFramebufferCommand;
 using set_uniform = SetUniformCommand;
 using draw_elements = DrawElementsCommand;
 using draw_geometry = DrawGeometryCommand;
+using blit_framebuffer = BlitFramebufferCommand;
 
 inline auto operator<<( CommandQueue& cb, const DrawGeometryCommand& c ) -> CommandQueue& {
     cb.push( c.va );
@@ -869,8 +913,96 @@ inline auto create_texture_cube( const CreateTextureCubemapInfo& info ) noexcept
     return { id, GL_TEXTURE_CUBE_MAP, info.width, info.height, 6 };
 }
 
-inline auto destroy_texture( Texture& t ) {
+inline auto destroy_texture( Texture& t ) noexcept {
     glDeleteTextures( 1, &t.id );
+}
+
+inline auto create_renderbuffer( const CreateRenderBufferInfo& info ) -> Renderbuffer {
+    auto id = 0u;
+    glCreateRenderbuffers( 1, &id );
+
+    auto internal_format = static_cast<GLint>( 0 );
+    auto format = static_cast<GLenum>( 0 );
+    auto type = static_cast<GLenum>( 0 );
+    detail::get_texture_format_from_pixelformat( info.format, internal_format, format, type );
+
+    if ( info.samples == 0 ) {
+        glNamedRenderbufferStorage( id, static_cast<GLenum>( internal_format ), static_cast<GLsizei>( info.width ),
+            static_cast<GLsizei>( info.height ) );
+    } else {
+        glNamedRenderbufferStorageMultisample( id, static_cast<GLsizei>( info.samples ),
+            static_cast<GLenum>( internal_format ), static_cast<GLsizei>( info.width ),
+            static_cast<GLsizei>( info.height ) );
+    }
+
+    return { id, info.width, info.height, info.samples };
+}
+
+inline auto destroy_renderbuffer( Renderbuffer& rb ) noexcept {
+    glDeleteRenderbuffers( 1, &rb.id );
+}
+
+inline auto create_framebuffer( const CreateFramebufferInfo& info ) noexcept -> Framebuffer {
+    auto id = 0u;
+    glCreateFramebuffers( 1, &id );
+
+    uint32_t mask = 0;
+
+    for ( const auto& attachment : info.attachments ) {
+        switch ( attachment.attachment ) {
+        case GL_COLOR_ATTACHMENT0:
+        case GL_COLOR_ATTACHMENT1:
+        case GL_COLOR_ATTACHMENT2:
+        case GL_COLOR_ATTACHMENT3:
+        case GL_COLOR_ATTACHMENT4:
+        case GL_COLOR_ATTACHMENT5:
+        case GL_COLOR_ATTACHMENT6:
+        case GL_COLOR_ATTACHMENT7:
+        case GL_COLOR_ATTACHMENT8:
+        case GL_COLOR_ATTACHMENT9:
+        case GL_COLOR_ATTACHMENT10:
+        case GL_COLOR_ATTACHMENT11:
+        case GL_COLOR_ATTACHMENT12:
+        case GL_COLOR_ATTACHMENT13:
+        case GL_COLOR_ATTACHMENT14:
+        case GL_COLOR_ATTACHMENT15:
+        case GL_COLOR_ATTACHMENT16:
+        case GL_COLOR_ATTACHMENT17:
+        case GL_COLOR_ATTACHMENT18:
+        case GL_COLOR_ATTACHMENT19:
+        case GL_COLOR_ATTACHMENT20:
+        case GL_COLOR_ATTACHMENT21:
+        case GL_COLOR_ATTACHMENT22:
+        case GL_COLOR_ATTACHMENT23:
+        case GL_COLOR_ATTACHMENT24:
+        case GL_COLOR_ATTACHMENT25:
+        case GL_COLOR_ATTACHMENT26:
+        case GL_COLOR_ATTACHMENT27:
+        case GL_COLOR_ATTACHMENT28:
+        case GL_COLOR_ATTACHMENT29:
+        case GL_COLOR_ATTACHMENT30:
+        case GL_COLOR_ATTACHMENT31:
+            mask |= GL_COLOR_BUFFER_BIT;
+            break;
+        case GL_DEPTH_ATTACHMENT:
+            mask |= GL_DEPTH_BUFFER_BIT;
+            break;
+        }
+
+        if ( attachment.attachment_target == GL_TEXTURE_2D ) {
+            glNamedFramebufferTexture( id, attachment.attachment, attachment.render_target, 0 );
+        } else if ( attachment.attachment_target == GL_RENDERBUFFER ) {
+            glNamedFramebufferRenderbuffer( id, attachment.attachment, GL_RENDERBUFFER, attachment.render_target );
+        }
+    }
+
+    const auto status = glCheckNamedFramebufferStatus( id, GL_FRAMEBUFFER );
+
+    return { id, info.width, info.height, mask, status };
+}
+
+inline auto destroy_framebuffer( Framebuffer& fb ) noexcept {
+    glDeleteFramebuffers( 1, &fb.id );
 }
 
 inline auto create_shader( const CreateShaderInfo& info ) noexcept -> Shader {
@@ -917,7 +1049,7 @@ inline auto create_shader( const CreateShaderInfo& info ) noexcept -> Shader {
     return Shader { id, type };
 }
 
-inline auto destroy_shader( Shader& shader ) -> void {
+inline auto destroy_shader( Shader& shader ) noexcept -> void {
     glDeleteProgram( shader.id );
     shader.id = 0;
     shader.target = GL_NONE;
@@ -979,12 +1111,12 @@ inline auto create_program_pipeline( const CreatePipelineInfo& info ) noexcept -
     return ProgramPipeline { id, all_uniforms, all_attributes, all_uniform_blocks };
 }
 
-inline auto destroy_program_pipeline( ProgramPipeline& p ) {
+inline auto destroy_program_pipeline( ProgramPipeline& p ) noexcept {
     glDeleteProgramPipelines( 1, &p.id );
     p.id = 0;
 }
 
-inline auto create_buffer( const CreateBufferInfo& info ) -> Buffer {
+inline auto create_buffer( const CreateBufferInfo& info ) noexcept -> Buffer {
     auto id = 0u;
     glCreateBuffers( 1, &id );
     glNamedBufferData( id, info.size, info.data, GL_DYNAMIC_DRAW );
@@ -997,20 +1129,20 @@ inline auto destroy_buffer( Buffer& b ) {
     b.id = 0;
 }
 
-inline auto update_buffer( Buffer& b, void* data, size_t size ) {
+inline auto update_buffer( Buffer& b, void* data, size_t size ) noexcept {
     void* ptr = glMapNamedBufferRange( b.id, 0, size, GL_MAP_WRITE_BIT );
     memcpy( ptr, data, size );
     glUnmapNamedBuffer( b.id );
 }
 
-template <typename T> inline auto update_buffer( Buffer& b, const std::vector<T>& data ) {
+template <typename T> inline auto update_buffer( Buffer& b, const std::vector<T>& data ) noexcept {
     const auto size = std::size( data ) * sizeof( T );
     void* ptr = glMapNamedBufferRange( b.id, 0, size, GL_MAP_WRITE_BIT );
     memcpy( ptr, &data[0], size );
     glUnmapNamedBuffer( b.id );
 }
 
-template <typename T, size_t N> inline auto update_buffer( Buffer& b, const std::array<T, N>& data ) {
+template <typename T, size_t N> inline auto update_buffer( Buffer& b, const std::array<T, N>& data ) noexcept {
     const auto size = std::size( data ) * sizeof( T );
     void* ptr = glMapNamedBufferRange( b.id, 0, size, GL_MAP_WRITE_BIT );
     memcpy( ptr, &data[0], size );
@@ -1168,7 +1300,7 @@ inline auto create_geometry( [[maybe_unused]] const CreateGeometryInfo& info ) n
     return g;
 }
 
-inline auto destroy_geometry( Geometry& geometry ) -> void {
+inline auto destroy_geometry( Geometry& geometry ) noexcept -> void {
     glDeleteBuffers( 1, &geometry.vb );
     geometry.vb = 0;
     glDeleteBuffers( 1, &geometry.eb );

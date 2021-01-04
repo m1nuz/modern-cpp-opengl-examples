@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cstdint>
 
 constexpr uint32_t CUBE_NUM_VERTICES = 24;

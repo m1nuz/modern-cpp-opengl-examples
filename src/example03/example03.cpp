@@ -177,7 +177,7 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char* argv[] ) {
                 auto view = translate( mat4( 1.f ), vec3( 0, 0, -10.f ) );
                 const auto projection_view = projection * view;
 
-                commands << gfx::clear_frame { { 0.4, 0.4, 0.4, 1 } };
+                commands << gfx::clear_framebuffer { { 0.4, 0.4, 0.4, 1 } };
                 commands << gfx::bind_pipeline { pipeline };
                 commands << gfx::bind_texture { 0, texture.id };
                 commands << gfx::bind_buffer { gfx::BufferType::Uniform, matrix_buffer, pipeline, "MatrixBlock" };

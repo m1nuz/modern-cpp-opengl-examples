@@ -26,7 +26,7 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char* argv[] ) {
             },
         .on_present =
             [&]( auto, auto ) {
-                commands << gfx::clear_frame { vec4 { 0.4, 0.4, 0.4, 1 } };
+                commands << gfx::clear_framebuffer { vec4 { 0.4, 0.4, 0.4, 1 } };
                 commands << gfx::bind_vao { geomerty };
                 commands << gfx::draw_elements { .num_elements = 3 };
 
